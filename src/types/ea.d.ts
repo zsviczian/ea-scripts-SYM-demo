@@ -13,6 +13,24 @@
 // ---------------------------------------------------------------------------
 
 declare interface ExcalidrawAutomate {
+  /** Excalidraw view currently bound to this EA instance. */
+  targetView: ExcalidrawView | null;
+
+  /** Rebinds this EA instance to an Excalidraw view. */
+  setView(view: ExcalidrawView): void;
+
+  /** Current persistent scene-change subscription used by the script. */
+  onSceneChangeHook: SceneChangeHook | null;
+
+  /** Finds a sidepanel tab already owned by this script. */
+  checkForActiveSidepanelTabForScript(scriptName?: string): ExcalidrawSidepanelTab | null;
+
+  /** Creates a sidepanel tab for this script. */
+  createSidepanelTab(title: string, persist?: boolean, reveal?: boolean): Promise<ExcalidrawSidepanelTab | null>;
+
+  /** Merges keys into an element's customData while preserving existing customData. */
+  addAppendUpdateCustomData(id: string, newData: Record<string, unknown>): ExcalidrawElement;
+
   /** Returns true when the running plugin version meets the minimum. */
   verifyMinimumPluginVersion(version: string): boolean;
 
@@ -31,8 +49,11 @@ declare interface ExcalidrawAutomate {
    */
   addElementsToView(repositionToCursor?: boolean, finalizeWhenFallbackIsAvailable?: boolean): Promise<void>;
 
-  /** The currently selected element IDs on the canvas. */
+  /** The currently selected elements on the canvas. */
   getViewSelectedElements(): ExcalidrawElement[];
+
+  /** Deletes the supplied elements from the active scene. */
+  deleteViewElements(elements: ExcalidrawElement[]): boolean;
 
   /** Gets the current script's settings object from Obsidian data. */
   getScriptSettings(): Record<string, unknown>;
@@ -49,6 +70,35 @@ declare interface ExcalidrawAutomate {
 
   // Style setters (apply before calling add*)
   style: ElementStyle;
+}
+
+
+declare interface ExcalidrawView {
+  [key: string]: unknown;
+}
+
+declare interface ExcalidrawSidepanelTab {
+  readonly contentEl: HTMLDivElement;
+  onOpen: () => Promise<void> | void;
+  onFocus: (view: ExcalidrawView | null) => void;
+  onClose: () => void;
+  onExcalidrawViewClosed: () => void;
+  open(reveal?: boolean): void;
+  close(): void;
+  getHostEA(): ExcalidrawAutomate;
+}
+
+declare interface SceneChangeHook {
+  appStateKeys: string[];
+  trackElements: boolean;
+  triggerWhenInvisible: boolean;
+  callback: (
+    elements: readonly ExcalidrawElement[],
+    appState: Record<string, unknown>,
+    files: Record<string, unknown>,
+    view: ExcalidrawView | null,
+    hookEA: ExcalidrawAutomate,
+  ) => void;
 }
 
 declare interface ElementStyle {
