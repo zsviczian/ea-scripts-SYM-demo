@@ -1,21 +1,37 @@
+/**
+ * @file panel.ts
+ * @overview Persistent-in-session Chart Studio side panel with reactive previews, multi-series editing, and budget-walk authoring.
+ */
+
 import { showNotice } from "../../sharedUtils/notice";
 import { drawChart } from "./chartRenderer";
 import {
+  BUDGET_NEGATIVE_COLOR,
+  BUDGET_POSITIVE_COLOR,
+  BUDGET_TOTAL_COLOR,
   PALETTES,
+  addSeries,
   applyPalette,
+  changeChartType,
   chartTypeLabel,
   cloneConfig,
   defaultChartConfig,
+  ensureSeriesWidths,
   getChartSelection,
+  getDatumValue,
+  isCircularType,
   isElementInChart,
+  normalizeBudgetWalk,
   parseBulkData,
   readChartConfig,
+  removeSeries,
+  supportsMultipleSeries,
   validateChart,
 } from "./chartModel";
 import { renderPreview } from "./panelPreview";
 import type { ChartConfig, ChartDatum, ChartType } from "./chartTypes";
 
-const CHART_TYPES: ChartType[] = ["pie", "donut", "bar", "bar-horizontal", "line", "area"];
+const CHART_TYPES: ChartType[] = ["pie", "donut", "bar", "bar-horizontal", "line", "area", "budget-walk"];
 
 interface PanelState {
   config: ChartConfig;
@@ -24,7 +40,6 @@ interface PanelState {
 }
 
 interface PanelRefs {
-  preview: HTMLElement | undefined;
   status: HTMLElement | undefined;
   updateButton: HTMLButtonElement | undefined;
   bulkTextarea: HTMLTextAreaElement | undefined;
@@ -38,14 +53,18 @@ export interface ChartPanelController {
   destroy(): void;
 }
 
+/** Creates the controller for a Chart Studio sidepanel tab. */
 export function createChartPanel(
   ea: ExcalidrawAutomate,
   tab: ExcalidrawSidepanelTab,
   initialConfig: ChartConfig,
 ): ChartPanelController {
-  const state: PanelState = { config: cloneConfig(initialConfig), activeChartId: null, viewAvailable: Boolean(ea.getExcalidrawAPI()) };
-  const refs: PanelRefs = { preview: undefined, status: undefined, updateButton: undefined, bulkTextarea: undefined };
-
+  const state: PanelState = {
+    config: cloneConfig(initialConfig),
+    activeChartId: null,
+    viewAvailable: Boolean(ea.getExcalidrawAPI()),
+  };
+  const refs: PanelRefs = { status: undefined, updateButton: undefined, bulkTextarea: undefined };
   const controller: ChartPanelController = {
     render: () => renderPanel(ea, tab, state, refs, controller),
     refreshPreview: () => refreshPreview(tab, state),
@@ -67,7 +86,6 @@ function renderPanel(
   controller: ChartPanelController,
 ): void {
   tab.contentEl.replaceChildren();
-  refs.preview = undefined;
   refs.status = undefined;
   refs.updateButton = undefined;
   refs.bulkTextarea = undefined;
@@ -76,7 +94,8 @@ function renderPanel(
   tab.contentEl.appendChild(root);
   renderHeader(root, state, refs);
   renderTypePicker(root, state, controller);
-  renderPreviewCard(root, state, refs);
+  renderPreviewCard(root, state);
+  if (supportsMultipleSeries(state.config.type)) renderSeriesEditor(root, state, controller);
   renderDataEditor(root, state, refs, controller);
   renderDisplayControls(root, state, controller);
   renderStyleControls(root, state, controller);
@@ -91,7 +110,7 @@ function renderHeader(root: HTMLElement, state: PanelState, refs: PanelRefs): vo
   const title = make("div", "chart-studio-title");
   title.textContent = "Chart Studio";
   const subtitle = make("div", "chart-studio-subtitle");
-  subtitle.textContent = "Native, editable Excalidraw charts";
+  subtitle.textContent = "Native, grouped, editable Excalidraw charts";
   titleWrap.append(title, subtitle);
   const badge = make("span", "chart-studio-badge");
   badge.textContent = state.activeChartId ? "EDIT" : "NEW";
@@ -103,7 +122,7 @@ function renderHeader(root: HTMLElement, state: PanelState, refs: PanelRefs): vo
 }
 
 function renderTypePicker(root: HTMLElement, state: PanelState, controller: ChartPanelController): void {
-  const section = sectionEl("Chart type", "Choose the geometry you want to draw.");
+  const section = sectionEl("Chart type", "Common chart forms plus a budget waterfall / walk.");
   const grid = make("div", "chart-studio-type-grid");
   for (const type of CHART_TYPES) {
     const button = makeButton(chartTypeIcon(type), "chart-studio-type");
@@ -113,7 +132,7 @@ function renderTypePicker(root: HTMLElement, state: PanelState, controller: Char
     label.textContent = chartTypeLabel(type);
     button.appendChild(label);
     button.addEventListener("click", () => {
-      state.config.type = type;
+      state.config = changeChartType(state.config, type);
       controller.render();
     });
     grid.appendChild(button);
@@ -122,19 +141,64 @@ function renderTypePicker(root: HTMLElement, state: PanelState, controller: Char
   root.appendChild(section);
 }
 
-function renderPreviewCard(root: HTMLElement, state: PanelState, refs: PanelRefs): void {
+function renderPreviewCard(root: HTMLElement, state: PanelState): void {
   const card = make("div", "chart-studio-preview-card");
   const top = make("div", "chart-studio-preview-top");
   const label = make("span");
   label.textContent = "Preview";
-  const dimensions = make("span", "chart-studio-muted");
-  dimensions.classList.add("chart-studio-preview-dimensions");
+  const dimensions = make("span", "chart-studio-muted chart-studio-preview-dimensions");
   dimensions.textContent = `${Math.round(state.config.width)} × ${Math.round(state.config.height)}`;
   top.append(label, dimensions);
   const preview = make("div", "chart-studio-preview");
-  refs.preview = preview;
   card.append(top, preview);
   root.appendChild(card);
+}
+
+function renderSeriesEditor(root: HTMLElement, state: PanelState, controller: ChartPanelController): void {
+  const section = sectionEl("Series", "Each series gets its own color and a value column in every category.");
+  const rows = make("div", "chart-studio-series-list");
+  state.config.series.forEach((series, index) => {
+    const row = make("div", "chart-studio-series-row");
+    const color = document.createElement("input");
+    color.type = "color";
+    color.value = series.color;
+    color.className = "chart-studio-color";
+    color.title = "Series color";
+    color.addEventListener("input", () => {
+      const current = state.config.series[index];
+      if (current) current.color = color.value;
+      controller.refreshPreview();
+    });
+    const name = document.createElement("input");
+    name.type = "text";
+    name.value = series.name;
+    name.placeholder = `Series ${index + 1}`;
+    name.className = "chart-studio-input";
+    name.addEventListener("input", () => {
+      const current = state.config.series[index];
+      if (current) current.name = name.value;
+      controller.refreshPreview();
+    });
+    const remove = iconButton("×", "Remove series", () => {
+      if (state.config.series.length <= 1) {
+        showNotice("Chart Studio: keep at least one data series.");
+        return;
+      }
+      removeSeries(state.config, index);
+      controller.render();
+    });
+    row.append(color, name, remove);
+    rows.appendChild(row);
+  });
+  section.appendChild(rows);
+  const add = makeButton("+ Add series");
+  add.disabled = state.config.series.length >= 8;
+  add.addEventListener("click", () => {
+    addSeries(state.config);
+    controller.render();
+  });
+  section.appendChild(add);
+  root.appendChild(section);
 }
 
 function renderDataEditor(
@@ -143,64 +207,164 @@ function renderDataEditor(
   refs: PanelRefs,
   controller: ChartPanelController,
 ): void {
-  const section = sectionEl("Data", "Edit rows directly or paste Label, Value data.");
+  if (state.config.type === "budget-walk") {
+    renderBudgetDataEditor(root, state, refs, controller);
+    return;
+  }
+  const multi = supportsMultipleSeries(state.config.type);
+  const section = sectionEl(
+    "Data",
+    multi ? "Categories are rows; each series is a numeric column." : "Edit slices directly or paste Label, Value data.",
+  );
+  if (multi) section.appendChild(renderMultiSeriesHeader(state));
   const rows = make("div", "chart-studio-data-rows");
-  state.config.data.forEach((row, index) => rows.appendChild(renderDataRow(state, row, index, controller)));
+  state.config.data.forEach((row, index) => {
+    rows.appendChild(multi ? renderMultiDataRow(state, row, index, controller) : renderSingleDataRow(state, row, index, controller));
+  });
   section.appendChild(rows);
   section.appendChild(renderDataToolbar(state, controller));
   section.appendChild(renderBulkEditor(state, refs, controller));
   root.appendChild(section);
 }
 
-function renderDataRow(
-  state: PanelState,
-  row: ChartDatum,
-  index: number,
-  controller: ChartPanelController,
-): HTMLElement {
-  const wrapper = make("div", "chart-studio-data-row");
+function renderMultiSeriesHeader(state: PanelState): HTMLElement {
+  const header = make("div", "chart-studio-data-header");
+  header.style.gridTemplateColumns = dataGridColumns(state.config.series.length, false);
+  const category = make("span");
+  category.textContent = "Category";
+  header.appendChild(category);
+  state.config.series.forEach((series) => {
+    const label = make("span");
+    label.textContent = series.name || "Series";
+    header.appendChild(label);
+  });
+  const spacer = make("span");
+  header.appendChild(spacer);
+  return header;
+}
+
+function renderSingleDataRow(state: PanelState, row: ChartDatum, index: number, controller: ChartPanelController): HTMLElement {
+  const wrapper = make("div", "chart-studio-data-row chart-studio-data-row-single");
   const color = document.createElement("input");
   color.type = "color";
   color.value = row.color;
   color.className = "chart-studio-color";
-  color.title = "Series color";
+  color.title = "Slice color";
   color.addEventListener("input", () => {
     const current = state.config.data[index];
     if (current) current.color = color.value;
     controller.refreshPreview();
   });
-
-  const label = document.createElement("input");
-  label.type = "text";
-  label.value = row.label;
-  label.placeholder = "Label";
-  label.className = "chart-studio-input";
-  label.addEventListener("input", () => {
+  const label = dataLabelInput(row.label, (value) => {
     const current = state.config.data[index];
-    if (current) current.label = label.value;
+    if (current) current.label = value;
     controller.refreshPreview();
   });
-
-  const value = document.createElement("input");
-  value.type = "number";
-  value.step = "any";
-  value.value = String(row.value);
-  value.className = "chart-studio-input chart-studio-value";
-  value.addEventListener("input", () => {
+  const value = dataValueInput(getDatumValue(row), (numeric) => {
     const current = state.config.data[index];
-    const numeric = Number(value.value);
-    if (current && Number.isFinite(numeric)) current.value = numeric;
+    if (current) current.values[0] = numeric;
     controller.refreshPreview();
   });
+  wrapper.append(color, label, value, rowControls(state, index, controller));
+  return wrapper;
+}
 
+function renderMultiDataRow(state: PanelState, row: ChartDatum, index: number, controller: ChartPanelController): HTMLElement {
+  const wrapper = make("div", "chart-studio-data-row chart-studio-data-row-multi");
+  wrapper.style.gridTemplateColumns = dataGridColumns(state.config.series.length, false);
+  wrapper.appendChild(dataLabelInput(row.label, (value) => {
+    const current = state.config.data[index];
+    if (current) current.label = value;
+    controller.refreshPreview();
+  }));
+  state.config.series.forEach((_series, seriesIndex) => {
+    wrapper.appendChild(dataValueInput(getDatumValue(row, seriesIndex), (numeric) => {
+      const current = state.config.data[index];
+      if (current) current.values[seriesIndex] = numeric;
+      controller.refreshPreview();
+    }));
+  });
+  wrapper.appendChild(rowControls(state, index, controller));
+  return wrapper;
+}
+
+function renderBudgetDataEditor(
+  root: HTMLElement,
+  state: PanelState,
+  refs: PanelRefs,
+  controller: ChartPanelController,
+): void {
+  normalizeBudgetWalk(state.config);
+  const section = sectionEl("Budget walk", "Opening total + positive/negative changes. Closing total is calculated automatically.");
+  const rows = make("div", "chart-studio-data-rows");
+  state.config.data.forEach((row, index) => {
+    const role = row.budgetRole ?? (index === 0 ? "opening" : index === state.config.data.length - 1 ? "closing" : "change");
+    const wrapper = make("div", "chart-studio-budget-row");
+    const badge = make("span", `chart-studio-budget-badge is-${role}`);
+    badge.textContent = role === "opening" ? "START" : role === "closing" ? "END" : getDatumValue(row) >= 0 ? "+" : "−";
+    const label = dataLabelInput(row.label, (value) => {
+      const current = state.config.data[index];
+      if (current) current.label = value;
+      controller.refreshPreview();
+    });
+    const value = dataValueInput(getDatumValue(row), (numeric) => {
+      const current = state.config.data[index];
+      if (!current || role === "closing") return;
+      current.values[0] = numeric;
+      normalizeBudgetWalk(state.config);
+      controller.refreshPreview();
+      const closingInput = root.querySelector<HTMLInputElement>(".chart-studio-budget-closing-value");
+      if (closingInput) closingInput.value = String(getDatumValue(state.config.data.at(-1)!));
+    });
+    if (role === "closing") {
+      value.readOnly = true;
+      value.classList.add("chart-studio-readonly", "chart-studio-budget-closing-value");
+      value.title = "Calculated from opening plus all changes";
+    }
+    const controls = make("div", "chart-studio-row-controls");
+    if (role === "change") {
+      controls.append(
+        iconButton("↑", "Move change up", () => moveBudgetChange(state, index, -1, controller)),
+        iconButton("↓", "Move change down", () => moveBudgetChange(state, index, 1, controller)),
+        iconButton("×", "Delete change", () => deleteBudgetChange(state, index, controller)),
+      );
+    }
+    wrapper.append(badge, label, value, controls);
+    rows.appendChild(wrapper);
+  });
+  section.appendChild(rows);
+  const toolbar = make("div", "chart-studio-toolbar");
+  const add = makeButton("+ Add change");
+  add.addEventListener("click", () => {
+    const insertAt = Math.max(1, state.config.data.length - 1);
+    state.config.data.splice(insertAt, 0, {
+      label: `Change ${insertAt}`,
+      values: [10],
+      color: BUDGET_POSITIVE_COLOR,
+      budgetRole: "change",
+    });
+    normalizeBudgetWalk(state.config);
+    controller.render();
+  });
+  const sample = makeButton("Sample");
+  sample.addEventListener("click", () => {
+    state.config = defaultChartConfig("budget-walk");
+    controller.render();
+  });
+  toolbar.append(add, sample);
+  section.appendChild(toolbar);
+  section.appendChild(renderBulkEditor(state, refs, controller));
+  root.appendChild(section);
+}
+
+function rowControls(state: PanelState, index: number, controller: ChartPanelController): HTMLElement {
   const controls = make("div", "chart-studio-row-controls");
   controls.append(
     iconButton("↑", "Move up", () => moveRow(state, index, -1, controller)),
     iconButton("↓", "Move down", () => moveRow(state, index, 1, controller)),
     iconButton("×", "Delete row", () => deleteRow(state, index, controller)),
   );
-  wrapper.append(color, label, value, controls);
-  return wrapper;
+  return controls;
 }
 
 function renderDataToolbar(state: PanelState, controller: ChartPanelController): HTMLElement {
@@ -209,17 +373,21 @@ function renderDataToolbar(state: PanelState, controller: ChartPanelController):
   add.addEventListener("click", () => {
     const palette = PALETTES[state.config.palette] ?? PALETTES.Classic ?? ["#4c6ef5"];
     const index = state.config.data.length;
-    state.config.data.push({ label: `Item ${index + 1}`, value: 10, color: palette[index % palette.length] ?? "#4c6ef5" });
+    state.config.data.push({
+      label: `Item ${index + 1}`,
+      values: Array.from({ length: state.config.series.length }, () => 10),
+      color: palette[index % palette.length] ?? "#4c6ef5",
+    });
     controller.render();
   });
   const sort = makeButton("Sort ↓");
   sort.addEventListener("click", () => {
-    state.config.data.sort((a, b) => b.value - a.value);
+    state.config.data.sort((a, b) => getDatumValue(b) - getDatumValue(a));
     controller.render();
   });
   const sample = makeButton("Sample");
   sample.addEventListener("click", () => {
-    state.config = defaultChartConfig();
+    state.config = defaultChartConfig(state.config.type);
     controller.render();
   });
   toolbar.append(add, sort, sample);
@@ -233,20 +401,59 @@ function renderBulkEditor(state: PanelState, refs: PanelRefs, controller: ChartP
   summary.textContent = "Paste CSV / tabular data";
   const textarea = document.createElement("textarea");
   textarea.className = "chart-studio-textarea";
-  textarea.placeholder = "Alpha, 40\nBeta, 30\nGamma, 20";
+  textarea.placeholder = bulkPlaceholder(state.config);
   refs.bulkTextarea = textarea;
   const apply = makeButton("Apply pasted data", "mod-cta");
   apply.addEventListener("click", () => {
-    const rows = parseBulkData(textarea.value, state.config.palette);
-    if (rows.length === 0) {
-      showNotice("Chart Studio: no valid rows found. Use one Label, Value pair per line.");
+    const parsed = parseBulkData(textarea.value, state.config.palette);
+    if (parsed.rows.length === 0) {
+      showNotice("Chart Studio: no valid rows found. Put the category/label first, followed by one or more numeric values.");
       return;
     }
-    state.config.data = rows;
+    applyParsedData(state, parsed.rows, parsed.seriesNames);
     controller.render();
   });
   details.append(summary, textarea, apply);
   return details;
+}
+
+function applyParsedData(state: PanelState, rows: ChartDatum[], seriesNames: string[]): void {
+  if (state.config.type === "budget-walk") {
+    const source = rows.map((row) => ({ ...row, values: [getDatumValue(row)] }));
+    const hasClosing = source.length > 1 && /^(closing|close|ending|end)$/i.test(source.at(-1)?.label.trim() ?? "");
+    const body = hasClosing ? source : [...source, { label: "Closing", values: [0], color: BUDGET_TOTAL_COLOR }];
+    body.forEach((row, index) => {
+      row.budgetRole = index === 0 ? "opening" : index === body.length - 1 ? "closing" : "change";
+    });
+    state.config.data = body;
+    normalizeBudgetWalk(state.config);
+    return;
+  }
+  if (isCircularType(state.config.type)) {
+    state.config.series = [{
+      name: seriesNames[0] || state.config.series[0]?.name || "Series 1",
+      color: state.config.series[0]?.color ?? "#4c6ef5",
+    }];
+    state.config.data = rows.map((row) => ({ ...row, values: [getDatumValue(row)] }));
+    return;
+  }
+  const seriesCount = Math.max(1, Math.min(8, Math.max(...rows.map((row) => row.values.length))));
+  const palette = PALETTES[state.config.palette] ?? PALETTES.Classic ?? ["#4c6ef5"];
+  state.config.series = Array.from({ length: seriesCount }, (_, index) => ({
+    name: seriesNames[index] || state.config.series[index]?.name || `Series ${index + 1}`,
+    color: state.config.series[index]?.color ?? palette[index % palette.length] ?? "#4c6ef5",
+  }));
+  state.config.data = rows.map((row) => ({
+    ...row,
+    values: Array.from({ length: seriesCount }, (_, index) => row.values[index] ?? 0),
+  }));
+  ensureSeriesWidths(state.config);
+}
+
+function bulkPlaceholder(config: ChartConfig): string {
+  if (config.type === "budget-walk") return "Opening, 100\nRevenue, 25\nCosts, -15\nClosing, 0";
+  if (supportsMultipleSeries(config.type)) return "Quarter, Actual, Plan\nQ1, 42, 36\nQ2, 55, 48\nQ3, 51, 57";
+  return "Alpha, 40\nBeta, 30\nGamma, 20";
 }
 
 function renderDisplayControls(root: HTMLElement, state: PanelState, controller: ChartPanelController): void {
@@ -261,7 +468,7 @@ function renderDisplayControls(root: HTMLElement, state: PanelState, controller:
     toggleField("Labels", state.config.showLabels, (value) => { state.config.showLabels = value; controller.refreshPreview(); }),
     toggleField("Values", state.config.showValues, (value) => { state.config.showValues = value; controller.refreshPreview(); }),
   );
-  if (state.config.type === "pie" || state.config.type === "donut") {
+  if (isCircularType(state.config.type)) {
     toggles.append(toggleField("Percentages", state.config.showPercentages, (value) => { state.config.showPercentages = value; controller.refreshPreview(); }));
   } else {
     toggles.append(
@@ -273,11 +480,7 @@ function renderDisplayControls(root: HTMLElement, state: PanelState, controller:
   root.appendChild(section);
 }
 
-function renderStyleControls(
-  root: HTMLElement,
-  state: PanelState,
-  controller: ChartPanelController,
-): void {
+function renderStyleControls(root: HTMLElement, state: PanelState, controller: ChartPanelController): void {
   const section = sectionEl("Style", "Size, palette and Excalidraw appearance.");
   const row = make("div", "chart-studio-field-grid");
   row.append(
@@ -285,10 +488,16 @@ function renderStyleControls(
     numberField("Height", state.config.height, 220, 1000, (value) => { state.config.height = value; controller.refreshPreview(); }),
   );
   section.appendChild(row);
-  section.appendChild(selectField("Palette", Object.keys(PALETTES), state.config.palette, (value) => {
-    state.config = applyPalette(state.config, value);
-    controller.render();
-  }));
+  if (state.config.type !== "budget-walk") {
+    section.appendChild(selectField("Palette", Object.keys(PALETTES), state.config.palette, (value) => {
+      state.config = applyPalette(state.config, value);
+      controller.render();
+    }));
+  } else {
+    const key = make("div", "chart-studio-budget-key");
+    key.append(colorKey(BUDGET_TOTAL_COLOR, "Total"), colorKey(BUDGET_POSITIVE_COLOR, "Increase"), colorKey(BUDGET_NEGATIVE_COLOR, "Decrease"));
+    section.appendChild(key);
+  }
   const styleGrid = make("div", "chart-studio-field-grid");
   styleGrid.append(
     numberField("Stroke", state.config.strokeWidth, 1, 5, (value) => { state.config.strokeWidth = value; controller.refreshPreview(); }),
@@ -302,6 +511,16 @@ function renderStyleControls(
     }));
   }
   root.appendChild(section);
+}
+
+function colorKey(color: string, labelText: string): HTMLElement {
+  const item = make("span", "chart-studio-color-key");
+  const dot = make("span", "chart-studio-color-key-dot");
+  dot.style.background = color;
+  const text = make("span");
+  text.textContent = labelText;
+  item.append(dot, text);
+  return item;
 }
 
 function renderActions(
@@ -322,7 +541,7 @@ function renderActions(
   load.addEventListener("click", () => loadSelectedChart(ea, state, controller));
   const reset = makeButton("Reset", "chart-studio-quiet");
   reset.addEventListener("click", () => {
-    state.config = defaultChartConfig();
+    state.config = defaultChartConfig(state.config.type);
     state.activeChartId = null;
     controller.render();
   });
@@ -330,12 +549,8 @@ function renderActions(
   root.appendChild(actions);
 }
 
-async function insertChart(
-  ea: ExcalidrawAutomate,
-  tab: ExcalidrawSidepanelTab,
-  state: PanelState,
-  refs: PanelRefs,
-): Promise<void> {
+async function insertChart(ea: ExcalidrawAutomate, tab: ExcalidrawSidepanelTab, state: PanelState, refs: PanelRefs): Promise<void> {
+  if (state.config.type === "budget-walk") normalizeBudgetWalk(state.config);
   const error = validateChart(state.config);
   if (error) {
     showNotice(`Chart Studio: ${error}`);
@@ -347,10 +562,7 @@ async function insertChart(
   }
   const chartId = createChartId();
   const center = ea.getViewCenterPosition();
-  const location = {
-    x: center.x - state.config.width / 2,
-    y: center.y - state.config.height / 2,
-  };
+  const location = { x: center.x - state.config.width / 2, y: center.y - state.config.height / 2 };
   await ea.setScriptSettings({ chartConfig: cloneConfig(state.config) });
   await drawChart(ea, cloneConfig(state.config), chartId, location);
   state.activeChartId = chartId;
@@ -359,12 +571,8 @@ async function insertChart(
   keepPanelFocused(tab);
 }
 
-async function updateLoadedChart(
-  ea: ExcalidrawAutomate,
-  tab: ExcalidrawSidepanelTab,
-  state: PanelState,
-  refs: PanelRefs,
-): Promise<void> {
+async function updateLoadedChart(ea: ExcalidrawAutomate, tab: ExcalidrawSidepanelTab, state: PanelState, refs: PanelRefs): Promise<void> {
+  if (state.config.type === "budget-walk") normalizeBudgetWalk(state.config);
   const error = validateChart(state.config);
   if (error) {
     showNotice(`Chart Studio: ${error}`);
@@ -390,14 +598,11 @@ async function updateLoadedChart(
   await ea.setScriptSettings({ chartConfig: cloneConfig(state.config) });
   await drawChart(ea, cloneConfig(state.config), state.activeChartId, location);
   updateStatus(ea, state, refs);
-  showNotice("Chart Studio: loaded chart updated from its embedded data.");
+  showNotice("Chart Studio: loaded chart updated from its embedded customData.");
   keepPanelFocused(tab);
 }
 
 function keepPanelFocused(tab: ExcalidrawSidepanelTab): void {
-  // Chart insertion no longer uses the reposition-to-cursor path, so normally
-  // the dock remains untouched. Focus again after the scene update as a small
-  // guard against host-level focus changes without closing/reopening the tab.
   tab.focus();
   window.requestAnimationFrame(() => tab.focus());
 }
@@ -424,7 +629,7 @@ function updateStatus(ea: ExcalidrawAutomate, state: PanelState, refs: PanelRefs
     refs.status.textContent = selected
       ? `Selected: ${chartTypeLabel(selected.config.type)} chart · click “Load selected chart” to edit`
       : state.activeChartId
-        ? "A chart is loaded for update. Select one of its elements anytime to reload its data."
+        ? "A chart is loaded for update. Draw chart still inserts a new copy."
         : "Ready. New charts are inserted in the visible canvas area.";
     refs.status.className = `chart-studio-status${selected ? " is-ready" : ""}`;
   }
@@ -432,10 +637,7 @@ function updateStatus(ea: ExcalidrawAutomate, state: PanelState, refs: PanelRefs
 }
 
 function getTopLeft(elements: ExcalidrawElement[]): { x: number; y: number } {
-  return {
-    x: Math.min(...elements.map((element) => element.x)),
-    y: Math.min(...elements.map((element) => element.y)),
-  };
+  return { x: Math.min(...elements.map((element) => element.x)), y: Math.min(...elements.map((element) => element.y)) };
 }
 
 function moveRow(state: PanelState, index: number, delta: number, controller: ChartPanelController): void {
@@ -458,10 +660,27 @@ function deleteRow(state: PanelState, index: number, controller: ChartPanelContr
   controller.render();
 }
 
+function moveBudgetChange(state: PanelState, index: number, delta: number, controller: ChartPanelController): void {
+  const target = index + delta;
+  if (target <= 0 || target >= state.config.data.length - 1) return;
+  const current = state.config.data[index];
+  const other = state.config.data[target];
+  if (!current || !other) return;
+  state.config.data[index] = other;
+  state.config.data[target] = current;
+  normalizeBudgetWalk(state.config);
+  controller.render();
+}
+
+function deleteBudgetChange(state: PanelState, index: number, controller: ChartPanelController): void {
+  if (index <= 0 || index >= state.config.data.length - 1) return;
+  state.config.data.splice(index, 1);
+  normalizeBudgetWalk(state.config);
+  controller.render();
+}
+
 function refreshPreview(tab: ExcalidrawSidepanelTab, state: PanelState): void {
-  // Query the current panel DOM every time instead of relying on a reference
-  // captured during a previous render. Some host-side tab lifecycle operations
-  // can reparent/recreate the content element while keeping the controller alive.
+  if (state.config.type === "budget-walk") normalizeBudgetWalk(state.config);
   const preview = tab.contentEl.querySelector<HTMLElement>(".chart-studio-preview");
   if (preview) renderPreview(preview, state.config);
   const dimensions = tab.contentEl.querySelector<HTMLElement>(".chart-studio-preview-dimensions");
@@ -471,6 +690,33 @@ function refreshPreview(tab: ExcalidrawSidepanelTab, state: PanelState): void {
 function createChartId(): string {
   if (typeof crypto !== "undefined" && typeof crypto.randomUUID === "function") return crypto.randomUUID();
   return `chart-${Date.now()}-${Math.random().toString(36).slice(2, 9)}`;
+}
+
+function dataLabelInput(value: string, onChange: (value: string) => void): HTMLInputElement {
+  const input = document.createElement("input");
+  input.type = "text";
+  input.value = value;
+  input.placeholder = "Label";
+  input.className = "chart-studio-input";
+  input.addEventListener("input", () => onChange(input.value));
+  return input;
+}
+
+function dataValueInput(value: number, onChange: (value: number) => void): HTMLInputElement {
+  const input = document.createElement("input");
+  input.type = "number";
+  input.step = "any";
+  input.value = String(value);
+  input.className = "chart-studio-input chart-studio-value";
+  input.addEventListener("input", () => {
+    const numeric = Number(input.value);
+    if (Number.isFinite(numeric)) onChange(numeric);
+  });
+  return input;
+}
+
+function dataGridColumns(seriesCount: number, includeColor: boolean): string {
+  return `${includeColor ? "26px " : ""}minmax(80px,1.3fr) repeat(${Math.max(1, seriesCount)},minmax(58px,.8fr)) auto`;
 }
 
 function textField(labelText: string, value: string, onChange: (value: string) => void): HTMLElement {
@@ -484,14 +730,7 @@ function textField(labelText: string, value: string, onChange: (value: string) =
   return field;
 }
 
-function numberField(
-  labelText: string,
-  value: number,
-  min: number,
-  max: number,
-  onChange: (value: number) => void,
-  step = 1,
-): HTMLElement {
+function numberField(labelText: string, value: number, min: number, max: number, onChange: (value: number) => void, step = 1): HTMLElement {
   const field = fieldShell(labelText);
   const input = document.createElement("input");
   input.type = "number";
@@ -508,12 +747,7 @@ function numberField(
   return field;
 }
 
-function selectField(
-  labelText: string,
-  options: string[],
-  selected: string,
-  onChange: (value: string) => void,
-): HTMLElement {
+function selectField(labelText: string, options: string[], selected: string, onChange: (value: string) => void): HTMLElement {
   const field = fieldShell(labelText);
   const select = document.createElement("select");
   select.className = "chart-studio-select";
@@ -529,14 +763,7 @@ function selectField(
   return field;
 }
 
-function rangeField(
-  labelText: string,
-  value: number,
-  min: number,
-  max: number,
-  suffix: string,
-  onChange: (value: number) => void,
-): HTMLElement {
+function rangeField(labelText: string, value: number, min: number, max: number, suffix: string, onChange: (value: number) => void): HTMLElement {
   const field = fieldShell(`${labelText}: ${Math.round(value)}${suffix}`);
   const input = document.createElement("input");
   input.type = "range";
@@ -554,8 +781,6 @@ function toggleField(labelText: string, checked: boolean, onChange: (value: bool
   const input = document.createElement("input");
   input.type = "checkbox";
   input.checked = checked;
-  // `input` fires immediately for checkbox toggles and keeps the chart preview
-  // in lockstep with the visible switch state.
   input.addEventListener("input", () => onChange(input.checked));
   const switchEl = make("span", "chart-studio-switch");
   const text = make("span");
@@ -611,6 +836,7 @@ function chartTypeIcon(type: ChartType): string {
     "bar-horizontal": "▤",
     line: "⌁",
     area: "◢",
+    "budget-walk": "↗",
   };
   return icons[type];
 }
@@ -621,10 +847,12 @@ function injectStyles(parent: HTMLElement): void {
 .chart-studio{--cs-border:var(--background-modifier-border);--cs-soft:var(--background-secondary);--cs-accent:var(--interactive-accent);display:flex;flex-direction:column;gap:14px;padding:2px 10px 18px;font-size:13px;color:var(--text-normal)}
 .chart-studio *{box-sizing:border-box}.chart-studio-header{display:flex;align-items:center;justify-content:space-between;padding-top:4px}.chart-studio-title{font-size:20px;font-weight:750;letter-spacing:-.02em}.chart-studio-subtitle,.chart-studio-muted{font-size:11px;color:var(--text-muted)}
 .chart-studio-badge{font-size:9px;font-weight:800;letter-spacing:.08em;padding:4px 7px;border-radius:999px;background:var(--cs-soft);color:var(--text-muted)}.chart-studio-status{padding:9px 10px;border-radius:9px;background:var(--cs-soft);color:var(--text-muted);line-height:1.35}.chart-studio-status.is-ready{box-shadow:inset 3px 0 0 var(--cs-accent)}.chart-studio-status.is-warning{color:var(--text-warning)}
-.chart-studio-section{display:flex;flex-direction:column;gap:9px;padding:12px;border:1px solid var(--cs-border);border-radius:12px;background:var(--background-primary)}.chart-studio-section-title{font-size:13px;font-weight:700}.chart-studio-section-hint{font-size:11px;color:var(--text-muted);margin-top:-5px}.chart-studio-type-grid{display:grid;grid-template-columns:repeat(3,1fr);gap:6px}.chart-studio-type{height:48px;display:flex;flex-direction:column;gap:2px;align-items:center;justify-content:center;border-radius:9px;font-size:17px}.chart-studio-type span{font-size:10px}.chart-studio-type.is-active{background:color-mix(in srgb,var(--interactive-accent) 16%,var(--background-primary));border-color:var(--interactive-accent);color:var(--text-accent)}
+.chart-studio-section{display:flex;flex-direction:column;gap:9px;padding:12px;border:1px solid var(--cs-border);border-radius:12px;background:var(--background-primary)}.chart-studio-section-title{font-size:13px;font-weight:700}.chart-studio-section-hint{font-size:11px;color:var(--text-muted);margin-top:-5px}.chart-studio-type-grid{display:grid;grid-template-columns:repeat(4,1fr);gap:6px}.chart-studio-type{height:50px;display:flex;flex-direction:column;gap:2px;align-items:center;justify-content:center;border-radius:9px;font-size:17px;padding:4px}.chart-studio-type span{font-size:9px;line-height:1.05;text-align:center}.chart-studio-type.is-active{background:color-mix(in srgb,var(--interactive-accent) 16%,var(--background-primary));border-color:var(--interactive-accent);color:var(--text-accent)}
 .chart-studio-preview-card{overflow:hidden;border:1px solid var(--cs-border);border-radius:12px;background:var(--background-primary)}.chart-studio-preview-top{display:flex;justify-content:space-between;padding:8px 10px;border-bottom:1px solid var(--cs-border);font-weight:650}.chart-studio-preview{height:180px;padding:6px;background:radial-gradient(circle at 1px 1px,var(--background-modifier-border) 1px,transparent 1px);background-size:14px 14px}.chart-studio-preview-svg{width:100%;height:100%;display:block}
-.chart-studio-data-rows{display:flex;flex-direction:column;gap:6px}.chart-studio-data-row{display:grid;grid-template-columns:26px minmax(0,1fr) 72px auto;gap:5px;align-items:center}.chart-studio-color{width:26px;height:28px;border:0;padding:0;background:transparent}.chart-studio-input,.chart-studio-select,.chart-studio-textarea{width:100%;min-width:0;border:1px solid var(--cs-border);border-radius:7px;background:var(--background-primary-alt);color:var(--text-normal)}.chart-studio-input,.chart-studio-select{height:30px;padding:4px 7px}.chart-studio-row-controls{display:flex;gap:2px}.chart-studio-icon-button{min-width:24px;height:27px;padding:0 5px}.chart-studio-toolbar{display:flex;flex-wrap:wrap;gap:5px}.chart-studio-details{border-top:1px solid var(--cs-border);padding-top:8px}.chart-studio-details summary{cursor:pointer;color:var(--text-muted);margin-bottom:7px}.chart-studio-textarea{height:82px;resize:vertical;padding:7px;font-family:var(--font-monospace);font-size:11px;margin-bottom:6px}
+.chart-studio-series-list,.chart-studio-data-rows{display:flex;flex-direction:column;gap:6px}.chart-studio-series-row{display:grid;grid-template-columns:26px minmax(0,1fr) auto;gap:6px;align-items:center}.chart-studio-data-row{display:grid;gap:5px;align-items:center}.chart-studio-data-row-single{grid-template-columns:26px minmax(0,1fr) 72px auto}.chart-studio-data-header{display:grid;gap:5px;align-items:end;padding:0 2px;color:var(--text-muted);font-size:9px;text-transform:uppercase;font-weight:700;letter-spacing:.03em}.chart-studio-data-header span:not(:first-child){text-align:center}.chart-studio-budget-row{display:grid;grid-template-columns:42px minmax(0,1fr) 78px auto;gap:5px;align-items:center}.chart-studio-budget-badge{display:flex;align-items:center;justify-content:center;height:24px;border-radius:6px;font-size:9px;font-weight:800;background:var(--cs-soft);color:var(--text-muted)}.chart-studio-budget-badge.is-opening,.chart-studio-budget-badge.is-closing{background:color-mix(in srgb,#4c6ef5 18%,var(--background-primary));color:#4c6ef5}.chart-studio-budget-badge.is-change{color:var(--text-normal)}
+.chart-studio-color{width:26px;height:28px;border:0;padding:0;background:transparent}.chart-studio-input,.chart-studio-select,.chart-studio-textarea{width:100%;min-width:0;border:1px solid var(--cs-border);border-radius:7px;background:var(--background-primary-alt);color:var(--text-normal)}.chart-studio-input,.chart-studio-select{height:30px;padding:4px 7px}.chart-studio-readonly{opacity:.7;background:var(--background-secondary)}.chart-studio-row-controls{display:flex;gap:2px;min-width:24px}.chart-studio-icon-button{min-width:24px;height:27px;padding:0 5px}.chart-studio-toolbar{display:flex;flex-wrap:wrap;gap:5px}.chart-studio-details{border-top:1px solid var(--cs-border);padding-top:8px}.chart-studio-details summary{cursor:pointer;color:var(--text-muted);margin-bottom:7px}.chart-studio-textarea{height:82px;resize:vertical;padding:7px;font-family:var(--font-monospace);font-size:11px;margin-bottom:6px}
 .chart-studio-field{display:flex;flex-direction:column;gap:4px;min-width:0}.chart-studio-field-label{font-size:10px;font-weight:650;color:var(--text-muted);text-transform:uppercase;letter-spacing:.04em}.chart-studio-field-grid{display:grid;grid-template-columns:1fr 1fr;gap:8px}.chart-studio-toggle-grid{display:grid;grid-template-columns:1fr 1fr;gap:7px}.chart-studio-toggle{display:flex;align-items:center;gap:7px;cursor:pointer}.chart-studio-toggle input{position:absolute;opacity:0;pointer-events:none}.chart-studio-switch{width:28px;height:16px;border-radius:999px;background:var(--background-modifier-border);position:relative;transition:.15s}.chart-studio-switch:after{content:"";position:absolute;width:12px;height:12px;left:2px;top:2px;border-radius:50%;background:var(--text-muted);transition:.15s}.chart-studio-toggle input:checked+.chart-studio-switch{background:var(--interactive-accent)}.chart-studio-toggle input:checked+.chart-studio-switch:after{transform:translateX(12px);background:white}.chart-studio-range{width:100%;accent-color:var(--interactive-accent)}
+.chart-studio-budget-key{display:flex;gap:10px;flex-wrap:wrap}.chart-studio-color-key{display:flex;align-items:center;gap:5px;color:var(--text-muted);font-size:11px}.chart-studio-color-key-dot{width:10px;height:10px;border-radius:3px;display:inline-block}
 .chart-studio-actions{position:sticky;bottom:0;z-index:2;display:grid;grid-template-columns:1fr 1fr;gap:6px;padding:10px 0 2px;background:linear-gradient(transparent,var(--background-primary) 18%)}.chart-studio-actions button{min-height:34px;border-radius:8px}.chart-studio-primary{grid-column:1/-1;font-weight:700}.chart-studio-quiet{opacity:.78}
 `;
   parent.appendChild(style);

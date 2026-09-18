@@ -1,6 +1,6 @@
 /**
  * @file main.ts
- * @overview Opens Chart Studio, a session-stable Excalidraw side panel for drawing and editing native pie, donut, bar, line, and area charts with chart data stored in element customData.
+ * @overview Opens Chart Studio, a session-stable Excalidraw side panel for drawing and editing native pie, donut, multi-series bar/line/area, and budget-walk charts with chart data stored in element customData.
  */
 
 import { showNotice } from "../../sharedUtils/notice";
