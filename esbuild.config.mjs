@@ -15,6 +15,7 @@ import ts from "typescript";
 const pkg = JSON.parse(readFileSync("./package.json", "utf8"));
 const scriptsRoot = join(process.cwd(), "src", "scripts");
 const outRoot = join(process.cwd(), "build");
+const obsidianScriptsRoot = "C:\\Obsidian\\testvault\\Excalidraw\\Scripts";
 
 /**
  * @param {string} scriptSlug
@@ -171,6 +172,7 @@ if (!scriptSlugs.length) {
 
 rmSync(outRoot, { recursive: true, force: true });
 mkdirSync(outRoot, { recursive: true });
+mkdirSync(obsidianScriptsRoot, { recursive: true });
 
 for (const slug of scriptSlugs) {
   const scriptDir = join(scriptsRoot, slug);
@@ -226,8 +228,10 @@ for (const slug of scriptSlugs) {
     bundleJs: `/* EA Script — ${slug} | ${pkg.name} v${pkg.version} */\n${bundleFile.text}\n/* end of bundle */`,
   });
 
-  writeFileSync(join(scriptOutDir, `${slug}.md`), markdownScript, "utf8");
+  const markdownTarget = join(scriptOutDir, `${slug}.md`);
+  writeFileSync(markdownTarget, markdownScript, "utf8");
   new Script(markdownScript, { filename: `${slug}.md` });
+  copyFileSync(markdownTarget, join(obsidianScriptsRoot, `${slug}.md`));
 
   const previewSource = join(scriptDir, "preview.svg");
   const previewTarget = join(scriptOutDir, `${slug}.svg`);
@@ -238,4 +242,6 @@ for (const slug of scriptSlugs) {
   }
 }
 
-console.log(`Built ${scriptSlugs.length} script target(s) into ${outRoot}`);
+console.log(
+  `Built ${scriptSlugs.length} script target(s) into ${outRoot} and deployed them to ${obsidianScriptsRoot}`,
+);
