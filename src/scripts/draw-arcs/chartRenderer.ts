@@ -9,6 +9,8 @@ import {
   BUDGET_TOTAL_COLOR,
   cloneConfig,
   getDatumValue,
+  getPercentShare,
+  getStackedExtents,
   isCircularType,
   normalizeBudgetWalk,
   supportsMultipleSeries,
@@ -175,8 +177,44 @@ function drawCircularLabel(
 }
 
 function drawVerticalBars(ctx: RenderContext, layout: Layout): void {
-  const values = allCartesianValues(ctx.config);
-  const scale = createScale(values);
+  if (ctx.config.barMode === "grouped") {
+    drawGroupedVerticalBars(ctx, layout);
+    return;
+  }
+
+  const percent = ctx.config.barMode === "percent";
+  const scale = percent ? { min: 0, max: 100 } : createScale(getStackedExtents(ctx.config));
+  drawCartesianGrid(ctx, layout, scale, false);
+  const categories = Math.max(1, ctx.config.data.length);
+  const slot = layout.plotWidth / categories;
+  const barWidth = Math.max(10, slot * 0.66);
+
+  ctx.config.data.forEach((row, dataIndex) => {
+    const x = layout.plotX + dataIndex * slot + (slot - barWidth) / 2;
+    let positive = 0;
+    let negative = 0;
+    ctx.config.series.forEach((series, seriesIndex) => {
+      const rawValue = getDatumValue(row, seriesIndex);
+      const value = percent ? getPercentShare(row, seriesIndex) : rawValue;
+      const start = percent || value >= 0 ? positive : negative;
+      const end = start + value;
+      if (percent || value >= 0) positive = end;
+      else negative = end;
+      const startY = mapY(start, scale.min, scale.max, layout.plotY, layout.plotHeight);
+      const endY = mapY(end, scale.min, scale.max, layout.plotY, layout.plotHeight);
+      const y = Math.min(startY, endY);
+      const height = Math.max(1, Math.abs(startY - endY));
+      setShapeStyle(ctx.ea, series.color, ctx.config);
+      const id = ctx.ea.addRect(x, y, barWidth, height);
+      tag(ctx, id, percent ? "bar-percent-segment" : "bar-stacked-segment", dataIndex, seriesIndex);
+      drawStackedValueLabel(ctx, rawValue, value, percent, x + barWidth / 2, y + height / 2 - 9, dataIndex, seriesIndex);
+    });
+    drawCategoryLabel(ctx, row.label, x + barWidth / 2, layout.plotY + layout.plotHeight + 9, slot, dataIndex);
+  });
+}
+
+function drawGroupedVerticalBars(ctx: RenderContext, layout: Layout): void {
+  const scale = createScale(allCartesianValues(ctx.config));
   drawCartesianGrid(ctx, layout, scale, false);
   const categories = Math.max(1, ctx.config.data.length);
   const seriesCount = Math.max(1, ctx.config.series.length);
@@ -204,8 +242,44 @@ function drawVerticalBars(ctx: RenderContext, layout: Layout): void {
 }
 
 function drawHorizontalBars(ctx: RenderContext, layout: Layout): void {
-  const values = allCartesianValues(ctx.config);
-  const scale = createScale(values);
+  if (ctx.config.barMode === "grouped") {
+    drawGroupedHorizontalBars(ctx, layout);
+    return;
+  }
+
+  const percent = ctx.config.barMode === "percent";
+  const scale = percent ? { min: 0, max: 100 } : createScale(getStackedExtents(ctx.config));
+  drawCartesianGrid(ctx, layout, scale, true);
+  const categories = Math.max(1, ctx.config.data.length);
+  const slot = layout.plotHeight / categories;
+  const barHeight = Math.max(10, slot * 0.66);
+
+  ctx.config.data.forEach((row, dataIndex) => {
+    const y = layout.plotY + dataIndex * slot + (slot - barHeight) / 2;
+    let positive = 0;
+    let negative = 0;
+    ctx.config.series.forEach((series, seriesIndex) => {
+      const rawValue = getDatumValue(row, seriesIndex);
+      const value = percent ? getPercentShare(row, seriesIndex) : rawValue;
+      const start = percent || value >= 0 ? positive : negative;
+      const end = start + value;
+      if (percent || value >= 0) positive = end;
+      else negative = end;
+      const startX = mapX(start, scale.min, scale.max, layout.plotX, layout.plotWidth);
+      const endX = mapX(end, scale.min, scale.max, layout.plotX, layout.plotWidth);
+      const x = Math.min(startX, endX);
+      const width = Math.max(1, Math.abs(startX - endX));
+      setShapeStyle(ctx.ea, series.color, ctx.config);
+      const id = ctx.ea.addRect(x, y, width, barHeight);
+      tag(ctx, id, percent ? "bar-percent-segment" : "bar-stacked-segment", dataIndex, seriesIndex);
+      drawStackedValueLabel(ctx, rawValue, value, percent, x + width / 2, y + barHeight / 2 - 9, dataIndex, seriesIndex);
+    });
+    drawHorizontalCategory(ctx, row.label, layout.plotX - 102, y + barHeight / 2 - 9, dataIndex);
+  });
+}
+
+function drawGroupedHorizontalBars(ctx: RenderContext, layout: Layout): void {
+  const scale = createScale(allCartesianValues(ctx.config));
   drawCartesianGrid(ctx, layout, scale, true);
   const categories = Math.max(1, ctx.config.data.length);
   const seriesCount = Math.max(1, ctx.config.series.length);
@@ -425,6 +499,24 @@ function drawCartesianValueLabel(
   const width = Math.max(42, Math.min(100, text.length * 7));
   const id = ctx.ea.addText(x - width / 2, y, text, { width, textAlign: "center" });
   tag(ctx, id, "value-label", dataIndex, seriesIndex);
+}
+
+function drawStackedValueLabel(
+  ctx: RenderContext,
+  rawValue: number,
+  renderedValue: number,
+  percent: boolean,
+  x: number,
+  y: number,
+  dataIndex: number,
+  seriesIndex: number,
+): void {
+  if (!ctx.config.showValues) return;
+  setTextStyle(ctx.ea, 12);
+  const text = percent ? `${formatNumber(renderedValue)}%` : formatNumber(rawValue);
+  const width = Math.max(42, Math.min(90, text.length * 7));
+  const id = ctx.ea.addText(x - width / 2, y, text, { width, textAlign: "center" });
+  tag(ctx, id, percent ? "percent-value-label" : "value-label", dataIndex, seriesIndex);
 }
 
 function drawBudgetValueLabel(

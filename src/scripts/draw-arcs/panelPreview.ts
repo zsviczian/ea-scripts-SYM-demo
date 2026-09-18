@@ -8,6 +8,8 @@ import {
   BUDGET_POSITIVE_COLOR,
   BUDGET_TOTAL_COLOR,
   getDatumValue,
+  getPercentShare,
+  getStackedExtents,
   isCircularType,
   supportsMultipleSeries,
 } from "./chartModel";
@@ -117,6 +119,14 @@ function polar(cx: number, cy: number, radius: number, angle: number): { x: numb
 }
 
 function drawBarPreview(svg: SVGSVGElement, config: ChartConfig, layout: PreviewLayout, horizontal: boolean): void {
+  if (config.barMode === "grouped") {
+    drawGroupedBarPreview(svg, config, layout, horizontal);
+    return;
+  }
+  drawStackedBarPreview(svg, config, layout, horizontal, config.barMode === "percent");
+}
+
+function drawGroupedBarPreview(svg: SVGSVGElement, config: ChartConfig, layout: PreviewLayout, horizontal: boolean): void {
   const values = allCartesianValues(config);
   const min = Math.min(0, ...values);
   const max = Math.max(1, 0, ...values);
@@ -155,6 +165,64 @@ function drawBarPreview(svg: SVGSVGElement, config: ChartConfig, layout: Preview
         if (config.showValues) appendText(svg, x + barWidth / 2, value >= 0 ? y - 3 : y + Math.abs(point - zero) + 8, formatValue(value), 6.5, TEXT, "middle", "600");
       });
       if (config.showLabels) appendText(svg, layout.plotX + dataIndex * slot + slot / 2, layout.plotY + layout.plotHeight + 12, ellipsis(row.label, 8), 7.5, MUTED, "middle");
+    }
+  });
+}
+
+function drawStackedBarPreview(
+  svg: SVGSVGElement,
+  config: ChartConfig,
+  layout: PreviewLayout,
+  horizontal: boolean,
+  percent: boolean,
+): void {
+  const extents = percent ? [0, 100] : getStackedExtents(config);
+  const min = percent ? 0 : Math.min(0, ...extents);
+  const max = percent ? 100 : Math.max(1, 0, ...extents);
+  const span = max - min || 1;
+  drawCartesianGuides(svg, config, layout, horizontal, min, max);
+
+  config.data.forEach((row, dataIndex) => {
+    let positive = 0;
+    let negative = 0;
+    if (horizontal) {
+      const slot = layout.plotHeight / Math.max(1, config.data.length);
+      const barHeight = Math.max(3, slot * 0.62);
+      const y = layout.plotY + dataIndex * slot + (slot - barHeight) / 2;
+      config.series.forEach((series, seriesIndex) => {
+        const raw = getDatumValue(row, seriesIndex);
+        const value = percent ? getPercentShare(row, seriesIndex) : raw;
+        const start = percent || value >= 0 ? positive : negative;
+        const end = start + value;
+        if (percent || value >= 0) positive = end;
+        else negative = end;
+        const startX = layout.plotX + ((start - min) / span) * layout.plotWidth;
+        const endX = layout.plotX + ((end - min) / span) * layout.plotWidth;
+        const x = Math.min(startX, endX);
+        const width = Math.max(1, Math.abs(endX - startX));
+        appendRect(svg, x, y, width, barHeight, series.color);
+        if (config.showValues && width > 16) appendText(svg, x + width / 2, y + barHeight / 2 + 2.5, percent ? `${formatValue(value)}%` : formatValue(raw), 6.2, TEXT, "middle", "600");
+      });
+      if (config.showLabels) appendText(svg, layout.plotX - 4, y + barHeight / 2 + 2.5, ellipsis(row.label, 8), 7.5, MUTED, "end");
+    } else {
+      const slot = layout.plotWidth / Math.max(1, config.data.length);
+      const barWidth = Math.max(4, slot * 0.62);
+      const x = layout.plotX + dataIndex * slot + (slot - barWidth) / 2;
+      config.series.forEach((series, seriesIndex) => {
+        const raw = getDatumValue(row, seriesIndex);
+        const value = percent ? getPercentShare(row, seriesIndex) : raw;
+        const start = percent || value >= 0 ? positive : negative;
+        const end = start + value;
+        if (percent || value >= 0) positive = end;
+        else negative = end;
+        const startY = layout.plotY + layout.plotHeight - ((start - min) / span) * layout.plotHeight;
+        const endY = layout.plotY + layout.plotHeight - ((end - min) / span) * layout.plotHeight;
+        const y = Math.min(startY, endY);
+        const height = Math.max(1, Math.abs(endY - startY));
+        appendRect(svg, x, y, barWidth, height, series.color);
+        if (config.showValues && height > 12) appendText(svg, x + barWidth / 2, y + height / 2 + 2.5, percent ? `${formatValue(value)}%` : formatValue(raw), 6.2, TEXT, "middle", "600");
+      });
+      if (config.showLabels) appendText(svg, x + barWidth / 2, layout.plotY + layout.plotHeight + 12, ellipsis(row.label, 8), 7.5, MUTED, "middle");
     }
   });
 }

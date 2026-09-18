@@ -5,6 +5,7 @@
 
 export type ChartType = "pie" | "donut" | "bar" | "bar-horizontal" | "line" | "area" | "budget-walk";
 export type BudgetRole = "opening" | "change" | "closing";
+export type BarMode = "grouped" | "stacked" | "percent";
 
 export interface ChartSeries {
   name: string;
@@ -22,7 +23,7 @@ export interface ChartDatum {
 }
 
 export interface ChartConfig {
-  version: 2;
+  version: 3;
   type: ChartType;
   title: string;
   width: number;
@@ -37,6 +38,8 @@ export interface ChartConfig {
   strokeWidth: number;
   roughness: number;
   donutHole: number;
+  /** Layout for column/horizontal bar charts. `percent` normalizes each category to 100%. */
+  barMode: BarMode;
   series: ChartSeries[];
   data: ChartDatum[];
 }

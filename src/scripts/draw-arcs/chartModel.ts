@@ -4,6 +4,7 @@
  */
 
 import type {
+  BarMode,
   BudgetRole,
   ChartConfig,
   ChartDatum,
@@ -49,7 +50,7 @@ export interface ParsedBulkData {
 export function defaultChartConfig(type: ChartType = "pie"): ChartConfig {
   const palette = PALETTES.Classic ?? ["#4c6ef5", "#f06595", "#12b886", "#fab005"];
   const base: ChartConfig = {
-    version: 2,
+    version: 3,
     type,
     title: type === "budget-walk" ? "Budget walk" : "My chart",
     width: 560,
@@ -64,6 +65,7 @@ export function defaultChartConfig(type: ChartType = "pie"): ChartConfig {
     strokeWidth: 2,
     roughness: 0,
     donutHole: 48,
+    barMode: "grouped",
     series: [{ name: "Series 1", color: palette[0] ?? "#4c6ef5" }],
     data: DEFAULT_ROWS.map(([label, value], index) => ({
       label,
@@ -108,7 +110,7 @@ export function cloneConfig(config: ChartConfig): ChartConfig {
   };
 }
 
-/** Reads v2 chart configs and migrates the original v1 single-value schema. */
+/** Reads current chart configs and migrates older single-value / pre-bar-mode schemas. */
 export function readChartConfig(value: unknown): ChartConfig {
   const fallback = defaultChartConfig();
   if (!isRecord(value)) return fallback;
@@ -118,7 +120,7 @@ export function readChartConfig(value: unknown): ChartConfig {
   const series = readSeries(value.series, palette);
   const data = readData(value.data, palette, series.length);
   const config: ChartConfig = {
-    version: 2,
+    version: 3,
     type,
     title: typeof value.title === "string" ? value.title.slice(0, 120) : fallback.title,
     width: boundedNumber(value.width, fallback.width, 280, 1400),
@@ -133,6 +135,7 @@ export function readChartConfig(value: unknown): ChartConfig {
     strokeWidth: boundedNumber(value.strokeWidth, fallback.strokeWidth, 1, 5),
     roughness: boundedNumber(value.roughness, fallback.roughness, 0, 2),
     donutHole: boundedNumber(value.donutHole, fallback.donutHole, 20, 75),
+    barMode: isBarMode(value.barMode) ? value.barMode : fallback.barMode,
     series,
     data,
   };
@@ -189,6 +192,7 @@ export function changeChartType(config: ChartConfig, type: ChartType): ChartConf
     next.palette = config.palette;
     next.strokeWidth = config.strokeWidth;
     next.roughness = config.roughness;
+    next.barMode = config.barMode;
     return next;
   }
   const next = cloneConfig(config);
@@ -201,6 +205,7 @@ export function changeChartType(config: ChartConfig, type: ChartType): ChartConf
     sample.palette = config.palette;
     sample.strokeWidth = config.strokeWidth;
     sample.roughness = config.roughness;
+    sample.barMode = config.barMode;
     return sample;
   }
   ensureSeriesWidths(next);
@@ -224,6 +229,10 @@ export function supportsMultipleSeries(type: ChartType): boolean {
 
 export function isCircularType(type: ChartType): boolean {
   return type === "pie" || type === "donut";
+}
+
+export function isBarType(type: ChartType): boolean {
+  return type === "bar" || type === "bar-horizontal";
 }
 
 export function getDatumValue(row: ChartDatum, seriesIndex = 0): number {
@@ -289,6 +298,14 @@ export function validateChart(config: ChartConfig): string | null {
   }
   if (isCircularType(config.type) && config.data.reduce((sum, row) => sum + getDatumValue(row), 0) <= 0) {
     return "Pie and donut charts need a total greater than zero.";
+  }
+  if (isBarType(config.type) && config.barMode === "percent") {
+    if (config.data.some((row) => row.values.some((value) => value < 0))) {
+      return "100% stacked bars cannot contain negative values.";
+    }
+    if (config.data.some((row) => row.values.reduce((sum, value) => sum + value, 0) <= 0)) {
+      return "Every category in a 100% stacked bar chart needs a total greater than zero.";
+    }
   }
   if (config.type === "budget-walk" && config.data.length < 2) return "Budget walk needs an opening and closing value.";
   return null;
@@ -361,6 +378,29 @@ export function chartTypeLabel(type: ChartType): string {
   return labels[type];
 }
 
+/** Returns the normalized 0..100 share for one series within a category. */
+export function getPercentShare(row: ChartDatum, seriesIndex: number): number {
+  const total = row.values.reduce((sum, value) => sum + Math.max(0, value), 0);
+  if (total <= 0) return 0;
+  return Math.max(0, getDatumValue(row, seriesIndex)) / total * 100;
+}
+
+/** Scale extents for signed stacked bars (positive and negative stacks accumulate separately). */
+export function getStackedExtents(config: ChartConfig): number[] {
+  const values: number[] = [0];
+  config.data.forEach((row) => {
+    let positive = 0;
+    let negative = 0;
+    config.series.forEach((_series, seriesIndex) => {
+      const value = getDatumValue(row, seriesIndex);
+      if (value >= 0) positive += value;
+      else negative += value;
+    });
+    values.push(positive, negative);
+  });
+  return values;
+}
+
 function parseNumeric(value: string): number {
   return Number(value.replace(/%$/, "").replace(/\s/g, ""));
 }
@@ -380,6 +420,10 @@ function readBoolean(value: unknown, fallback: boolean): boolean {
 
 function isChartType(value: unknown): value is ChartType {
   return value === "pie" || value === "donut" || value === "bar" || value === "bar-horizontal" || value === "line" || value === "area" || value === "budget-walk";
+}
+
+function isBarMode(value: unknown): value is BarMode {
+  return value === "grouped" || value === "stacked" || value === "percent";
 }
 
 function isBudgetRole(value: unknown): value is BudgetRole {

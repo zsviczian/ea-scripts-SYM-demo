@@ -19,6 +19,7 @@ import {
   ensureSeriesWidths,
   getChartSelection,
   getDatumValue,
+  isBarType,
   isCircularType,
   isElementInChart,
   normalizeBudgetWalk,
@@ -29,7 +30,7 @@ import {
   validateChart,
 } from "./chartModel";
 import { renderPreview } from "./panelPreview";
-import type { ChartConfig, ChartDatum, ChartType } from "./chartTypes";
+import type { BarMode, ChartConfig, ChartDatum, ChartType } from "./chartTypes";
 
 const CHART_TYPES: ChartType[] = ["pie", "donut", "bar", "bar-horizontal", "line", "area", "budget-walk"];
 
@@ -156,6 +157,7 @@ function renderPreviewCard(root: HTMLElement, state: PanelState): void {
 
 function renderSeriesEditor(root: HTMLElement, state: PanelState, controller: ChartPanelController): void {
   const section = sectionEl("Series", "Each series gets its own color and a value column in every category.");
+  if (isBarType(state.config.type)) section.appendChild(renderBarModePicker(state, controller));
   const rows = make("div", "chart-studio-series-list");
   state.config.series.forEach((series, index) => {
     const row = make("div", "chart-studio-series-row");
@@ -199,6 +201,36 @@ function renderSeriesEditor(root: HTMLElement, state: PanelState, controller: Ch
   });
   section.appendChild(add);
   root.appendChild(section);
+}
+
+function renderBarModePicker(state: PanelState, controller: ChartPanelController): HTMLElement {
+  const wrapper = make("div", "chart-studio-bar-mode-wrap");
+  const label = make("div", "chart-studio-field-label");
+  label.textContent = "Bar layout";
+  const picker = make("div", "chart-studio-segmented");
+  const options: Array<{ mode: BarMode; label: string; title: string }> = [
+    { mode: "grouped", label: "Grouped", title: "Place series side by side" },
+    { mode: "stacked", label: "Stacked", title: "Stack positive and negative series values within each category" },
+    { mode: "percent", label: "100%", title: "Normalize each category to 100% and show each series as its share of the whole" },
+  ];
+  options.forEach(({ mode, label: text, title }) => {
+    const button = makeButton(text, "chart-studio-segment-button");
+    button.title = title;
+    if (state.config.barMode === mode) button.classList.add("is-active");
+    button.addEventListener("click", () => {
+      state.config.barMode = mode;
+      controller.render();
+    });
+    picker.appendChild(button);
+  });
+  const hint = make("div", "chart-studio-mini-hint");
+  hint.textContent = state.config.barMode === "percent"
+    ? "Each category is normalized to 100%. Input values are treated as relative shares; negative values are not allowed."
+    : state.config.barMode === "stacked"
+      ? "Series are accumulated into one bar per category; positive and negative values stack separately."
+      : "Series are drawn side by side within each category.";
+  wrapper.append(label, picker, hint);
+  return wrapper;
 }
 
 function renderDataEditor(
@@ -466,7 +498,7 @@ function renderDisplayControls(root: HTMLElement, state: PanelState, controller:
   toggles.append(
     toggleField("Legend", state.config.showLegend, (value) => { state.config.showLegend = value; controller.refreshPreview(); }),
     toggleField("Labels", state.config.showLabels, (value) => { state.config.showLabels = value; controller.refreshPreview(); }),
-    toggleField("Values", state.config.showValues, (value) => { state.config.showValues = value; controller.refreshPreview(); }),
+    toggleField(isBarType(state.config.type) && state.config.barMode === "percent" ? "Percent values" : "Values", state.config.showValues, (value) => { state.config.showValues = value; controller.refreshPreview(); }),
   );
   if (isCircularType(state.config.type)) {
     toggles.append(toggleField("Percentages", state.config.showPercentages, (value) => { state.config.showPercentages = value; controller.refreshPreview(); }));
@@ -849,6 +881,7 @@ function injectStyles(parent: HTMLElement): void {
 .chart-studio-badge{font-size:9px;font-weight:800;letter-spacing:.08em;padding:4px 7px;border-radius:999px;background:var(--cs-soft);color:var(--text-muted)}.chart-studio-status{padding:9px 10px;border-radius:9px;background:var(--cs-soft);color:var(--text-muted);line-height:1.35}.chart-studio-status.is-ready{box-shadow:inset 3px 0 0 var(--cs-accent)}.chart-studio-status.is-warning{color:var(--text-warning)}
 .chart-studio-section{display:flex;flex-direction:column;gap:9px;padding:12px;border:1px solid var(--cs-border);border-radius:12px;background:var(--background-primary)}.chart-studio-section-title{font-size:13px;font-weight:700}.chart-studio-section-hint{font-size:11px;color:var(--text-muted);margin-top:-5px}.chart-studio-type-grid{display:grid;grid-template-columns:repeat(4,1fr);gap:6px}.chart-studio-type{height:50px;display:flex;flex-direction:column;gap:2px;align-items:center;justify-content:center;border-radius:9px;font-size:17px;padding:4px}.chart-studio-type span{font-size:9px;line-height:1.05;text-align:center}.chart-studio-type.is-active{background:color-mix(in srgb,var(--interactive-accent) 16%,var(--background-primary));border-color:var(--interactive-accent);color:var(--text-accent)}
 .chart-studio-preview-card{overflow:hidden;border:1px solid var(--cs-border);border-radius:12px;background:var(--background-primary)}.chart-studio-preview-top{display:flex;justify-content:space-between;padding:8px 10px;border-bottom:1px solid var(--cs-border);font-weight:650}.chart-studio-preview{height:180px;padding:6px;background:radial-gradient(circle at 1px 1px,var(--background-modifier-border) 1px,transparent 1px);background-size:14px 14px}.chart-studio-preview-svg{width:100%;height:100%;display:block}
+.chart-studio-bar-mode-wrap{display:flex;flex-direction:column;gap:5px;padding-bottom:2px}.chart-studio-segmented{display:grid;grid-template-columns:repeat(3,1fr);gap:4px;padding:3px;border:1px solid var(--cs-border);border-radius:9px;background:var(--background-secondary)}.chart-studio-segment-button{height:29px;padding:3px 5px;border:0;border-radius:6px;background:transparent;font-size:10px}.chart-studio-segment-button.is-active{background:var(--interactive-accent);color:var(--text-on-accent);font-weight:700}.chart-studio-mini-hint{font-size:10px;line-height:1.35;color:var(--text-muted)}
 .chart-studio-series-list,.chart-studio-data-rows{display:flex;flex-direction:column;gap:6px}.chart-studio-series-row{display:grid;grid-template-columns:26px minmax(0,1fr) auto;gap:6px;align-items:center}.chart-studio-data-row{display:grid;gap:5px;align-items:center}.chart-studio-data-row-single{grid-template-columns:26px minmax(0,1fr) 72px auto}.chart-studio-data-header{display:grid;gap:5px;align-items:end;padding:0 2px;color:var(--text-muted);font-size:9px;text-transform:uppercase;font-weight:700;letter-spacing:.03em}.chart-studio-data-header span:not(:first-child){text-align:center}.chart-studio-budget-row{display:grid;grid-template-columns:42px minmax(0,1fr) 78px auto;gap:5px;align-items:center}.chart-studio-budget-badge{display:flex;align-items:center;justify-content:center;height:24px;border-radius:6px;font-size:9px;font-weight:800;background:var(--cs-soft);color:var(--text-muted)}.chart-studio-budget-badge.is-opening,.chart-studio-budget-badge.is-closing{background:color-mix(in srgb,#4c6ef5 18%,var(--background-primary));color:#4c6ef5}.chart-studio-budget-badge.is-change{color:var(--text-normal)}
 .chart-studio-color{width:26px;height:28px;border:0;padding:0;background:transparent}.chart-studio-input,.chart-studio-select,.chart-studio-textarea{width:100%;min-width:0;border:1px solid var(--cs-border);border-radius:7px;background:var(--background-primary-alt);color:var(--text-normal)}.chart-studio-input,.chart-studio-select{height:30px;padding:4px 7px}.chart-studio-readonly{opacity:.7;background:var(--background-secondary)}.chart-studio-row-controls{display:flex;gap:2px;min-width:24px}.chart-studio-icon-button{min-width:24px;height:27px;padding:0 5px}.chart-studio-toolbar{display:flex;flex-wrap:wrap;gap:5px}.chart-studio-details{border-top:1px solid var(--cs-border);padding-top:8px}.chart-studio-details summary{cursor:pointer;color:var(--text-muted);margin-bottom:7px}.chart-studio-textarea{height:82px;resize:vertical;padding:7px;font-family:var(--font-monospace);font-size:11px;margin-bottom:6px}
 .chart-studio-field{display:flex;flex-direction:column;gap:4px;min-width:0}.chart-studio-field-label{font-size:10px;font-weight:650;color:var(--text-muted);text-transform:uppercase;letter-spacing:.04em}.chart-studio-field-grid{display:grid;grid-template-columns:1fr 1fr;gap:8px}.chart-studio-toggle-grid{display:grid;grid-template-columns:1fr 1fr;gap:7px}.chart-studio-toggle{display:flex;align-items:center;gap:7px;cursor:pointer}.chart-studio-toggle input{position:absolute;opacity:0;pointer-events:none}.chart-studio-switch{width:28px;height:16px;border-radius:999px;background:var(--background-modifier-border);position:relative;transition:.15s}.chart-studio-switch:after{content:"";position:absolute;width:12px;height:12px;left:2px;top:2px;border-radius:50%;background:var(--text-muted);transition:.15s}.chart-studio-toggle input:checked+.chart-studio-switch{background:var(--interactive-accent)}.chart-studio-toggle input:checked+.chart-studio-switch:after{transform:translateX(12px);background:white}.chart-studio-range{width:100%;accent-color:var(--interactive-accent)}
