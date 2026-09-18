@@ -1,0 +1,10 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="800" height="450" viewBox="0 0 800 450" role="img" aria-label="Draw arcs preview">
+  <rect width="800" height="450" fill="#f4f1ea" />
+  <rect x="48" y="48" width="704" height="354" rx="8" fill="#fffdf8" stroke="#d7d0c4" stroke-width="2" />
+  <path d="M 212 290 A 116 116 0 0 1 328 174" fill="none" stroke="#c2410c" stroke-width="6" stroke-linecap="round" />
+  <path d="M 420 290 A 116 116 0 0 0 536 174" fill="none" stroke="#2563eb" stroke-width="6" stroke-linecap="round" />
+  <circle cx="212" cy="290" r="5" fill="#c2410c" />
+  <circle cx="420" cy="290" r="5" fill="#2563eb" />
+  <text x="88" y="112" fill="#292524" font-family="Georgia, serif" font-size="36">Draw arcs</text>
+  <text x="88" y="350" fill="#78716c" font-family="ui-monospace, SFMono-Regular, Menlo, monospace" font-size="18">editable polyline geometry</text>
+</svg>
