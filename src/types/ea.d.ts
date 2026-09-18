@@ -17,7 +17,7 @@ declare interface ExcalidrawAutomate {
   targetView: ExcalidrawView | null;
 
   /** Rebinds this EA instance to an Excalidraw view. */
-  setView(view: ExcalidrawView): void;
+  setView(view: ExcalidrawView | null): void;
 
   /** Current persistent scene-change subscription used by the script. */
   onSceneChangeHook: SceneChangeHook | null;
@@ -28,6 +28,9 @@ declare interface ExcalidrawAutomate {
   /** Creates a sidepanel tab for this script. */
   createSidepanelTab(title: string, persist?: boolean, reveal?: boolean): Promise<ExcalidrawSidepanelTab | null>;
 
+  /** Marks the current sidepanel tab as persistent across plugin/workspace restarts. */
+  persistSidepanelTab(): ExcalidrawSidepanelTab | null;
+
   /** Merges keys into an element's customData while preserving existing customData. */
   addAppendUpdateCustomData(id: string, newData: Record<string, unknown>): ExcalidrawElement;
 
@@ -37,8 +40,14 @@ declare interface ExcalidrawAutomate {
   /** Returns the live Excalidraw React API for the active canvas. */
   getExcalidrawAPI(): ExcalidrawAPI | null;
 
-  /** Opens the EA workbench so elements can be staged before insertion. */
+  /** Clears staged workbench elements without changing the sidepanel or style. */
+  clear(): void;
+
+  /** Resets the workbench and style. NOTE: the real API also closes sidepanelTab. */
   reset(): void;
+
+  /** Adds the supplied staged element IDs to one Excalidraw group. */
+  addToGroup(objectIds: string[]): string;
 
   /**
    * Copies staged elements to the live scene.
@@ -47,10 +56,19 @@ declare interface ExcalidrawAutomate {
    * @param finalizeWhenFallbackIsAvailable    When true, the scene is finalised even if the
    *                                           canvas API falls back to a compatibility path.
    */
-  addElementsToView(repositionToCursor?: boolean, finalizeWhenFallbackIsAvailable?: boolean): Promise<void>;
+  addElementsToView(
+    repositionToCursor?: boolean,
+    save?: boolean,
+    newElementsOnTop?: boolean,
+    shouldRestoreElements?: boolean,
+    captureUpdate?: unknown,
+  ): Promise<void>;
 
   /** The currently selected elements on the canvas. */
   getViewSelectedElements(): ExcalidrawElement[];
+
+  /** Center point of the currently visible Excalidraw viewport. */
+  getViewCenterPosition(): { x: number; y: number };
 
   /** Deletes the supplied elements from the active scene. */
   deleteViewElements(elements: ExcalidrawElement[]): boolean;
@@ -83,6 +101,7 @@ declare interface ExcalidrawSidepanelTab {
   onFocus: (view: ExcalidrawView | null) => void;
   onClose: () => void;
   onExcalidrawViewClosed: () => void;
+  focus(): void;
   open(reveal?: boolean): void;
   close(): void;
   getHostEA(): ExcalidrawAutomate;

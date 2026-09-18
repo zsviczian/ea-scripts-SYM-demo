@@ -32,9 +32,10 @@ export async function drawChart(
   config: ChartConfig,
   chartId: string,
   location: ChartLocation,
-  repositionToCursor: boolean,
 ): Promise<void> {
-  ea.reset();
+  // clear() starts a fresh EA workbench transaction without closing the
+  // Chart Studio sidepanel. ea.reset() must not be used by a live panel.
+  ea.clear();
   const ctx: RenderContext = { ea, config, chartId, ids: [] };
   const layout = createLayout(config, location);
   drawTitle(ctx, layout);
@@ -45,7 +46,16 @@ export async function drawChart(
   else drawLineOrArea(ctx, layout);
 
   if (config.showLegend) drawLegend(ctx, layout);
-  await ea.addElementsToView(repositionToCursor, true);
+
+  // Treat the chart as one movable object on the canvas while preserving the
+  // native elements inside the group for normal Excalidraw group editing.
+  if (ctx.ids.length > 1) ea.addToGroup(ctx.ids);
+
+  // Commit in place. In a persistent sidepanel workflow, using EA's
+  // reposition-to-cursor path can hand interaction focus back to the canvas
+  // and make the dock feel like a transient modal. Callers provide an exact
+  // location instead, so the Chart Studio tab stays active.
+  await ea.addElementsToView(false, true, true);
 }
 
 function createLayout(config: ChartConfig, location: ChartLocation): Layout {

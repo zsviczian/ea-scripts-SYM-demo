@@ -32,6 +32,7 @@ interface PanelRefs {
 
 export interface ChartPanelController {
   render(): void;
+  refreshPreview(): void;
   setViewAvailable(available: boolean): void;
   refreshSelection(): void;
   destroy(): void;
@@ -47,6 +48,7 @@ export function createChartPanel(
 
   const controller: ChartPanelController = {
     render: () => renderPanel(ea, tab, state, refs, controller),
+    refreshPreview: () => refreshPreview(tab, state),
     setViewAvailable: (available) => {
       state.viewAvailable = available;
       updateStatus(ea, state, refs);
@@ -76,10 +78,10 @@ function renderPanel(
   renderTypePicker(root, state, controller);
   renderPreviewCard(root, state, refs);
   renderDataEditor(root, state, refs, controller);
-  renderDisplayControls(root, state, refs);
-  renderStyleControls(root, state, refs, controller);
-  renderActions(root, ea, state, refs, controller);
-  updatePreview(refs, state.config);
+  renderDisplayControls(root, state, controller);
+  renderStyleControls(root, state, controller);
+  renderActions(root, ea, tab, state, refs, controller);
+  controller.refreshPreview();
   updateStatus(ea, state, refs);
 }
 
@@ -126,6 +128,7 @@ function renderPreviewCard(root: HTMLElement, state: PanelState, refs: PanelRefs
   const label = make("span");
   label.textContent = "Preview";
   const dimensions = make("span", "chart-studio-muted");
+  dimensions.classList.add("chart-studio-preview-dimensions");
   dimensions.textContent = `${Math.round(state.config.width)} × ${Math.round(state.config.height)}`;
   top.append(label, dimensions);
   const preview = make("div", "chart-studio-preview");
@@ -164,7 +167,7 @@ function renderDataRow(
   color.addEventListener("input", () => {
     const current = state.config.data[index];
     if (current) current.color = color.value;
-    refreshPanelPreview(state, wrapper);
+    controller.refreshPreview();
   });
 
   const label = document.createElement("input");
@@ -175,7 +178,7 @@ function renderDataRow(
   label.addEventListener("input", () => {
     const current = state.config.data[index];
     if (current) current.label = label.value;
-    refreshPanelPreview(state, wrapper);
+    controller.refreshPreview();
   });
 
   const value = document.createElement("input");
@@ -187,7 +190,7 @@ function renderDataRow(
     const current = state.config.data[index];
     const numeric = Number(value.value);
     if (current && Number.isFinite(numeric)) current.value = numeric;
-    refreshPanelPreview(state, wrapper);
+    controller.refreshPreview();
   });
 
   const controls = make("div", "chart-studio-row-controls");
@@ -246,24 +249,24 @@ function renderBulkEditor(state: PanelState, refs: PanelRefs, controller: ChartP
   return details;
 }
 
-function renderDisplayControls(root: HTMLElement, state: PanelState, refs: PanelRefs): void {
+function renderDisplayControls(root: HTMLElement, state: PanelState, controller: ChartPanelController): void {
   const section = sectionEl("Display", "Titles, labels, legend and plot guides.");
   section.appendChild(textField("Title", state.config.title, (value) => {
     state.config.title = value;
-    updatePreview(refs, state.config);
+    controller.refreshPreview();
   }));
   const toggles = make("div", "chart-studio-toggle-grid");
   toggles.append(
-    toggleField("Legend", state.config.showLegend, (value) => { state.config.showLegend = value; updatePreview(refs, state.config); }),
-    toggleField("Labels", state.config.showLabels, (value) => { state.config.showLabels = value; updatePreview(refs, state.config); }),
-    toggleField("Values", state.config.showValues, (value) => { state.config.showValues = value; updatePreview(refs, state.config); }),
+    toggleField("Legend", state.config.showLegend, (value) => { state.config.showLegend = value; controller.refreshPreview(); }),
+    toggleField("Labels", state.config.showLabels, (value) => { state.config.showLabels = value; controller.refreshPreview(); }),
+    toggleField("Values", state.config.showValues, (value) => { state.config.showValues = value; controller.refreshPreview(); }),
   );
   if (state.config.type === "pie" || state.config.type === "donut") {
-    toggles.append(toggleField("Percentages", state.config.showPercentages, (value) => { state.config.showPercentages = value; updatePreview(refs, state.config); }));
+    toggles.append(toggleField("Percentages", state.config.showPercentages, (value) => { state.config.showPercentages = value; controller.refreshPreview(); }));
   } else {
     toggles.append(
-      toggleField("Axes", state.config.showAxes, (value) => { state.config.showAxes = value; updatePreview(refs, state.config); }),
-      toggleField("Grid", state.config.showGrid, (value) => { state.config.showGrid = value; updatePreview(refs, state.config); }),
+      toggleField("Axes", state.config.showAxes, (value) => { state.config.showAxes = value; controller.refreshPreview(); }),
+      toggleField("Grid", state.config.showGrid, (value) => { state.config.showGrid = value; controller.refreshPreview(); }),
     );
   }
   section.appendChild(toggles);
@@ -273,14 +276,13 @@ function renderDisplayControls(root: HTMLElement, state: PanelState, refs: Panel
 function renderStyleControls(
   root: HTMLElement,
   state: PanelState,
-  refs: PanelRefs,
   controller: ChartPanelController,
 ): void {
   const section = sectionEl("Style", "Size, palette and Excalidraw appearance.");
   const row = make("div", "chart-studio-field-grid");
   row.append(
-    numberField("Width", state.config.width, 280, 1400, (value) => { state.config.width = value; updatePreview(refs, state.config); }),
-    numberField("Height", state.config.height, 220, 1000, (value) => { state.config.height = value; updatePreview(refs, state.config); }),
+    numberField("Width", state.config.width, 280, 1400, (value) => { state.config.width = value; controller.refreshPreview(); }),
+    numberField("Height", state.config.height, 220, 1000, (value) => { state.config.height = value; controller.refreshPreview(); }),
   );
   section.appendChild(row);
   section.appendChild(selectField("Palette", Object.keys(PALETTES), state.config.palette, (value) => {
@@ -289,14 +291,14 @@ function renderStyleControls(
   }));
   const styleGrid = make("div", "chart-studio-field-grid");
   styleGrid.append(
-    numberField("Stroke", state.config.strokeWidth, 1, 5, (value) => { state.config.strokeWidth = value; }),
-    numberField("Roughness", state.config.roughness, 0, 2, (value) => { state.config.roughness = value; }, 0.5),
+    numberField("Stroke", state.config.strokeWidth, 1, 5, (value) => { state.config.strokeWidth = value; controller.refreshPreview(); }),
+    numberField("Roughness", state.config.roughness, 0, 2, (value) => { state.config.roughness = value; controller.refreshPreview(); }, 0.5),
   );
   section.appendChild(styleGrid);
   if (state.config.type === "donut") {
     section.appendChild(rangeField("Donut hole", state.config.donutHole, 20, 75, "%", (value) => {
       state.config.donutHole = value;
-      updatePreview(refs, state.config);
+      controller.refreshPreview();
     }));
   }
   root.appendChild(section);
@@ -305,16 +307,17 @@ function renderStyleControls(
 function renderActions(
   root: HTMLElement,
   ea: ExcalidrawAutomate,
+  tab: ExcalidrawSidepanelTab,
   state: PanelState,
   refs: PanelRefs,
   controller: ChartPanelController,
 ): void {
   const actions = make("div", "chart-studio-actions");
   const insert = makeButton("Draw chart", "mod-cta chart-studio-primary");
-  insert.addEventListener("click", () => void insertChart(ea, state, refs));
+  insert.addEventListener("click", () => void insertChart(ea, tab, state, refs));
   const update = makeButton("Update loaded chart", "chart-studio-secondary");
   refs.updateButton = update;
-  update.addEventListener("click", () => void updateLoadedChart(ea, state, refs));
+  update.addEventListener("click", () => void updateLoadedChart(ea, tab, state, refs));
   const load = makeButton("Load selected chart", "chart-studio-secondary");
   load.addEventListener("click", () => loadSelectedChart(ea, state, controller));
   const reset = makeButton("Reset", "chart-studio-quiet");
@@ -327,7 +330,12 @@ function renderActions(
   root.appendChild(actions);
 }
 
-async function insertChart(ea: ExcalidrawAutomate, state: PanelState, refs: PanelRefs): Promise<void> {
+async function insertChart(
+  ea: ExcalidrawAutomate,
+  tab: ExcalidrawSidepanelTab,
+  state: PanelState,
+  refs: PanelRefs,
+): Promise<void> {
   const error = validateChart(state.config);
   if (error) {
     showNotice(`Chart Studio: ${error}`);
@@ -338,14 +346,25 @@ async function insertChart(ea: ExcalidrawAutomate, state: PanelState, refs: Pane
     return;
   }
   const chartId = createChartId();
+  const center = ea.getViewCenterPosition();
+  const location = {
+    x: center.x - state.config.width / 2,
+    y: center.y - state.config.height / 2,
+  };
   await ea.setScriptSettings({ chartConfig: cloneConfig(state.config) });
-  await drawChart(ea, cloneConfig(state.config), chartId, { x: 0, y: 0 }, true);
+  await drawChart(ea, cloneConfig(state.config), chartId, location);
   state.activeChartId = chartId;
   updateStatus(ea, state, refs);
-  showNotice("Chart Studio: chart added. Its elements remain individually editable.");
+  showNotice("Chart Studio: chart added and grouped. Double-click/enter the group to edit individual elements.");
+  keepPanelFocused(tab);
 }
 
-async function updateLoadedChart(ea: ExcalidrawAutomate, state: PanelState, refs: PanelRefs): Promise<void> {
+async function updateLoadedChart(
+  ea: ExcalidrawAutomate,
+  tab: ExcalidrawSidepanelTab,
+  state: PanelState,
+  refs: PanelRefs,
+): Promise<void> {
   const error = validateChart(state.config);
   if (error) {
     showNotice(`Chart Studio: ${error}`);
@@ -369,9 +388,18 @@ async function updateLoadedChart(ea: ExcalidrawAutomate, state: PanelState, refs
   const location = getTopLeft(oldElements);
   ea.deleteViewElements(oldElements);
   await ea.setScriptSettings({ chartConfig: cloneConfig(state.config) });
-  await drawChart(ea, cloneConfig(state.config), state.activeChartId, location, false);
+  await drawChart(ea, cloneConfig(state.config), state.activeChartId, location);
   updateStatus(ea, state, refs);
   showNotice("Chart Studio: loaded chart updated from its embedded data.");
+  keepPanelFocused(tab);
+}
+
+function keepPanelFocused(tab: ExcalidrawSidepanelTab): void {
+  // Chart insertion no longer uses the reposition-to-cursor path, so normally
+  // the dock remains untouched. Focus again after the scene update as a small
+  // guard against host-level focus changes without closing/reopening the tab.
+  tab.focus();
+  window.requestAnimationFrame(() => tab.focus());
 }
 
 function loadSelectedChart(ea: ExcalidrawAutomate, state: PanelState, controller: ChartPanelController): void {
@@ -397,7 +425,7 @@ function updateStatus(ea: ExcalidrawAutomate, state: PanelState, refs: PanelRefs
       ? `Selected: ${chartTypeLabel(selected.config.type)} chart · click “Load selected chart” to edit`
       : state.activeChartId
         ? "A chart is loaded for update. Select one of its elements anytime to reload its data."
-        : "Ready. Charts are inserted at the current canvas pointer.";
+        : "Ready. New charts are inserted in the visible canvas area.";
     refs.status.className = `chart-studio-status${selected ? " is-ready" : ""}`;
   }
   if (refs.updateButton) refs.updateButton.disabled = !state.activeChartId || !state.viewAvailable;
@@ -430,14 +458,14 @@ function deleteRow(state: PanelState, index: number, controller: ChartPanelContr
   controller.render();
 }
 
-function refreshPanelPreview(state: PanelState, origin: HTMLElement): void {
-  const root = origin.closest(".chart-studio");
-  const preview = root?.querySelector<HTMLElement>(".chart-studio-preview");
+function refreshPreview(tab: ExcalidrawSidepanelTab, state: PanelState): void {
+  // Query the current panel DOM every time instead of relying on a reference
+  // captured during a previous render. Some host-side tab lifecycle operations
+  // can reparent/recreate the content element while keeping the controller alive.
+  const preview = tab.contentEl.querySelector<HTMLElement>(".chart-studio-preview");
   if (preview) renderPreview(preview, state.config);
-}
-
-function updatePreview(refs: PanelRefs, config: ChartConfig): void {
-  if (refs.preview) renderPreview(refs.preview, config);
+  const dimensions = tab.contentEl.querySelector<HTMLElement>(".chart-studio-preview-dimensions");
+  if (dimensions) dimensions.textContent = `${Math.round(state.config.width)} × ${Math.round(state.config.height)}`;
 }
 
 function createChartId(): string {
@@ -472,7 +500,7 @@ function numberField(
   input.step = String(step);
   input.value = String(value);
   input.className = "chart-studio-input";
-  input.addEventListener("change", () => {
+  input.addEventListener("input", () => {
     const numeric = Number(input.value);
     if (Number.isFinite(numeric)) onChange(Math.min(max, Math.max(min, numeric)));
   });
@@ -526,7 +554,9 @@ function toggleField(labelText: string, checked: boolean, onChange: (value: bool
   const input = document.createElement("input");
   input.type = "checkbox";
   input.checked = checked;
-  input.addEventListener("change", () => onChange(input.checked));
+  // `input` fires immediately for checkbox toggles and keeps the chart preview
+  // in lockstep with the visible switch state.
+  input.addEventListener("input", () => onChange(input.checked));
   const switchEl = make("span", "chart-studio-switch");
   const text = make("span");
   text.textContent = labelText;

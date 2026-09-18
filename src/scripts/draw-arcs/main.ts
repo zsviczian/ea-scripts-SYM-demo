@@ -1,6 +1,6 @@
 /**
  * @file main.ts
- * @overview Opens Chart Studio, a persistent Excalidraw side panel for drawing and editing native pie, donut, bar, line, and area charts with chart data stored in element customData.
+ * @overview Opens Chart Studio, a session-stable Excalidraw side panel for drawing and editing native pie, donut, bar, line, and area charts with chart data stored in element customData.
  */
 
 import { showNotice } from "../../sharedUtils/notice";
@@ -23,18 +23,21 @@ async function main(): Promise<void> {
 
   const settings = ea.getScriptSettings();
   const initialConfig = readChartConfig(settings.chartConfig);
-  const tab = await ea.createSidepanelTab("Chart Studio", true, true);
+  const tab = await ea.createSidepanelTab("Chart Studio", false, true);
   if (!tab) {
     showNotice("Chart Studio: could not create the Excalidraw side panel.");
     return;
   }
 
+
   const controller = createChartPanel(ea, tab, initialConfig);
   tab.onOpen = () => controller.render();
   tab.onFocus = (view) => {
-    if (view && view !== ea.targetView) {
+    if (view !== ea.targetView) {
       ea.setView(view);
-      ea.reset();
+      // Never call ea.reset() while a sidepanel is open: reset() closes the
+      // hosted tab. clear() only discards staged workbench elements.
+      ea.clear();
     }
     controller.setViewAvailable(Boolean(view));
     controller.refreshSelection();
